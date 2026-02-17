@@ -1,0 +1,15 @@
+- selection:
+  - brainset: pei_pandarinath_nlb_2021
+    sessions:
+      - jenkins_maze_train
+  config:
+    readout:
+      readout_id: cursor_velocity_2d
+      timestamp_key: position.timestamps
+      value_key: position.pos
+      normalize_mean: 0.
+      normalize_std: 1. # 100.
+      metrics:
+        - metric:
+            _target_: torchmetrics.R2Score
+      eval_interval: nlb_eval_intervals

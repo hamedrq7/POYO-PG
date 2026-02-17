@@ -1,0 +1,1 @@
+!python train_debugging.py --config-name train_poyo_mp.yaml
