@@ -1,5 +1,5 @@
 - selection:
-  - brainset: hippo_processed
+  - brainset: rat_hippocampus
     sessions:
       - achilles_10252013_sessinfo
       - buddy_06272013_sessinfo
