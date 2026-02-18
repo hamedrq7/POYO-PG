@@ -13,7 +13,7 @@ train_transforms: []
 eval_transforms: []
 
 # Training
-epochs: 1000 # 1000
+epochs: 1 # 1000
 batch_size: 128 # 128
 eval_epochs: 1  # frequency for doing validation
 eval_batch_size: null  # if null, will use batch_size
