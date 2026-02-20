@@ -2,8 +2,8 @@
 # this file needs to be combined with a model config and a dataset config
 
 # Paths
-data_root: "D:/Pose/Neuro Code/data/NoveltySessInfoMatFiles/linear_processed/hippo_processed" 
-# data_root: "/content/drive/MyDrive/Colab Notebooks/POYO/rat_hippocampus/data"
+# data_root: "D:/Pose/Neuro Code/data/NoveltySessInfoMatFiles/linear_processed/hippo_processed" 
+data_root: "/content/drive/MyDrive/Colab Notebooks/POYO/rat_hippocampus/data/"
 
 log_dir: ./logs/multi_session
 
