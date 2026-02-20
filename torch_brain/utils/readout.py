@@ -53,7 +53,8 @@ def prepare_for_readout(
 
     timestamps = data.get_nested_attribute(timestamp_key)
     values = data.get_nested_attribute(value_key)
-    
+    # print('timestamps', timestamps.shape, timestamps[0:5])
+    # print('values', values.shape, values[0:5], values[-5:])
     
 
     # z-scale the values if mean/std are specified in the config file
@@ -80,6 +81,7 @@ def prepare_for_readout(
     weights = resolve_weights_based_on_interval_membership(
         timestamps, data, config=readout_config.get("weights", None)
     )
+    # print('weights', weights.shape, weights[0:5])
 
     # resolve eval mask
     eval_mask = np.ones(len(timestamps), dtype=np.bool_)
@@ -87,5 +89,6 @@ def prepare_for_readout(
     if eval_interval_key is not None:
         eval_interval = data.get_nested_attribute(eval_interval_key)
         eval_mask = isin_interval(timestamps, eval_interval)
+    # print('eval_mask', eval_mask.shape, eval_mask[0:5], eval_mask[-5:])
 
     return timestamps, values, weights, eval_mask

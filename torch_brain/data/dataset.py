@@ -477,8 +477,14 @@ class Dataset(torch.utils.data.Dataset):
         )
 
     def __getitem__(self, index: DatasetIndex):
+        """
+        IMPORTANT: 
+            the slice() function that gets called in the get() function, does not retain the original timestamps.
+            it changes the timestamps to be relative to the new time window. so the time of the spikes relative to the whole session is not passed to model (from here at least)
+        """
+        # print('index', index.recording_id, index.start, index.end)
         sample = self.get(index.recording_id, index.start, index.end)
-
+        # print(sample.position.timestamps[:])
         # apply transform
         if self.transform is not None:
             sample = self.transform(sample)

@@ -2,16 +2,13 @@
   - brainset: rat_hippocampus
     sessions:
       - achilles_10252013_sessinfo
-      - buddy_06272013_sessinfo
-      - cicero_09012014_sessinfo
-      - gatsby_08022013_sessinfo
   config:
     readout:
       readout_id: linear_maze_pos
       timestamp_key: position.timestamps
       value_key: position.pos
       normalize_mean: 0.
-      normalize_std: 100. # 100.
+      normalize_std: 1. # 100.
       metrics:
         - metric:
             _target_: torchmetrics.R2Score

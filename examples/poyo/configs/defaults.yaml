@@ -2,9 +2,8 @@
 # this file needs to be combined with a model config and a dataset config
 
 # Paths
-# data_root: "D:/Pose/Neuro Code/data/NoveltySessInfoMatFiles/linear_processed/hippo_processed" 
-# data_root: "D:/Pose/Neuro Code/data/poyo_datasets_processed"
-data_root: "/content/drive/MyDrive/Colab Notebooks/POYO/rat_hippocampus/data"
+data_root: "D:/Pose/Neuro Code/data/NoveltySessInfoMatFiles/linear_processed/hippo_processed" 
+# data_root: "/content/drive/MyDrive/Colab Notebooks/POYO/rat_hippocampus/data"
 
 log_dir: ./logs/multi_session
 
@@ -13,7 +12,7 @@ train_transforms: []
 eval_transforms: []
 
 # Training
-epochs: 1 # 1000
+epochs: 1000 # 1000
 batch_size: 128 # 128
 eval_epochs: 1  # frequency for doing validation
 eval_batch_size: null  # if null, will use batch_size
@@ -29,7 +28,7 @@ optim:
 wandb:
   enable: true # false 
   entity: null
-  project: poyo_hippo
+  project: poyo_hippo_benchmarking
   run_name: poyo_hippo
   log_model: false
 

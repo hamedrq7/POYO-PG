@@ -1,7 +1,7 @@
 defaults:
   - defaults.yaml
   - model: poyo_1.3M.yaml
-  - dataset: hippo.yaml # perich_miller_population_2018.yaml #  #   # 
+  - dataset: hippo_multisession.yaml # perich_miller_population_2018.yaml #  #   # 
   - _self_  # ensures current config overrides defaults
 
 train_transforms:

@@ -217,9 +217,12 @@ class DataModule(L.LightningDataModule):
         # self.get_unit_ids() -> list of size 9725, its numpy strings, like: 
         # ['perich_miller_population_2018/c_20131003_center_out_reaching/group_electrode_group_M1/elec0/unit_0', 'perich_miller_population_2018/c_20131003_center_out_reaching/group_electrode_group_M1/elec1/unit_1']
         print('self.get_unit_ids()', len(self.get_unit_ids()), (self.get_unit_ids()[0:2]))
+        print('Model unit umbeding vocab: ', model.unit_emb, model.unit_emb.weight.shape)
 
-        print('self.get_session_ids()', len(self.get_session_ids()), (self.get_session_ids()[0:2]))
         model.session_emb.initialize_vocab(self.get_session_ids())
+        print('self.get_session_ids()', len(self.get_session_ids()), (self.get_session_ids()[0:2]))
+        print('Model Sess umbeding vocab: ', model.session_emb, model.session_emb.weight.shape)
+        
         # self.get_session_ids(), again list of strings (size 99), like: 
         # ['perich_miller_population_2018/c_20131003_center_out_reaching', 'perich_miller_population_2018/c_20131009_random_target_reaching']
 
@@ -244,10 +247,10 @@ class DataModule(L.LightningDataModule):
             sampler=train_sampler,
             collate_fn=collate,
             batch_size=self.cfg.batch_size,
-            # num_workers=self.cfg.num_workers,
+            num_workers=self.cfg.num_workers,
             drop_last=False,
-            pin_memory=False,
-            persistent_workers=False, # True if self.cfg.num_workers > 0 else False,
+            pin_memory=True,
+            persistent_workers=True, # True if self.cfg.num_workers > 0 else False,
             prefetch_factor=None, # 2 if self.cfg.num_workers > 0 else None,
         )
 
@@ -294,7 +297,7 @@ class DataModule(L.LightningDataModule):
             shuffle=False,
             batch_size=batch_size,
             collate_fn=collate,
-            # num_workers=self.cfg.num_workers,
+            num_workers=self.cfg.num_workers,
             drop_last=False,
         )
 
@@ -320,7 +323,7 @@ class DataModule(L.LightningDataModule):
             shuffle=False,
             batch_size=batch_size,
             collate_fn=collate,
-            # num_workers=self.cfg.num_workers,
+            num_workers=self.cfg.num_workers,
         )
 
         self.log.info(f"Testing on {len(test_sampler)} samples")

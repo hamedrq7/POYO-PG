@@ -217,6 +217,8 @@ class POYO(nn.Module):
                 "`model.session_emb.initialize_vocab(session_ids)`"
             )
 
+        # print('In POYO forward...')
+
         # input
         inputs = self.unit_emb(input_unit_index) + self.token_type_emb(input_token_type)
         input_timestamp_emb = self.rotary_emb(input_timestamps)
@@ -252,11 +254,14 @@ class POYO(nn.Module):
             latent_timestamp_emb,
         )
         output_latents = output_queries + self.dec_ffn(output_queries)
-        output = self.readout(output_latents)
+        # print('output_latents', output_latents.shape)
 
+        output = self.readout(output_latents)
+        # print('output', output.shape)
+        
         if unpack_output:
             output = [output[b][output_mask[b]] for b in range(output.size(0))]
-
+        
         return output
 
     def tokenize(self, data: Data) -> Dict:
@@ -276,12 +281,21 @@ class POYO(nn.Module):
         spike_unit_index = data.spikes.unit_index
         spike_timestamps = data.spikes.timestamps
 
+        # print(start, end) # 0, 1
+        # print(unit_ids) # 0, 1, ..., 120 ? or what? its multisession
+        # print(spike_unit_index.shape, spike_unit_index[0:3]) # [N, ]
+        # print(spike_timestamps.shape, spike_timestamps[0:3]) # [N, ]
+
         # create start and end tokens for each unit
         (
             se_token_type_index,
             se_unit_index,
             se_timestamps,
         ) = create_start_end_unit_tokens(unit_ids, start, end)
+        
+        # print(se_token_type_index.shape, se_token_type_index[0:5]) # [#neuronsx2]
+        # print(se_unit_index.shape, se_unit_index[0:5]) # [#neuronsx2]
+        # print(se_timestamps.shape, se_timestamps[0:5]) # [#neuronsx2]
 
         # append start and end tokens to the spike sequence
         spike_token_type_index = np.concatenate(
@@ -290,10 +304,18 @@ class POYO(nn.Module):
         spike_unit_index = np.concatenate([se_unit_index, spike_unit_index])
         spike_timestamps = np.concatenate([se_timestamps, spike_timestamps])
 
+        # print(spike_token_type_index.shape, spike_token_type_index[0:5]) # [#neuronsx2 + N]
+        # print(spike_unit_index.shape, spike_unit_index[0:5]) # [#neuronsx2 + N]
+        # print(spike_timestamps.shape, spike_timestamps[0:5]) # [#neuronsx2 + N]
+
         # unit_index is relative to the recording, so we want it to map it to
         # the global unit index
         local_to_global_map = np.array(self.unit_emb.tokenizer(unit_ids))
+        # print(local_to_global_map.shape, local_to_global_map[0:3])
+
+        # print('Before: ', spike_unit_index[0:5])
         spike_unit_index = local_to_global_map[spike_unit_index]
+        # print('After: ', spike_unit_index[0:5])
 
         ### prepare latents
         latent_index, latent_timestamps = create_linspace_latent_tokens(
@@ -302,6 +324,8 @@ class POYO(nn.Module):
             step=self.latent_step,
             num_latents_per_step=self.num_latents_per_step,
         )
+        # print('latent_index', latent_index.shape, latent_index[0:5])
+        # print('latent_timestamps', latent_timestamps.shape, latent_timestamps[0:5], latent_timestamps[-5:])
 
         output_timestamps, output_values, output_weights, eval_mask = (
             prepare_for_readout(data, self.readout_spec)
