@@ -427,6 +427,7 @@ class DistributedStitchingFixedWindowSampler(torch.utils.data.DistributedSampler
                     num_windows = (
                         int((end - start - self.window_length + 1e-9) / self.step) + 1
                     )
+                    # print('start, end, num_windows', start, end, num_windows)
                     if num_windows > 0:
                         interval_sizes.append(num_windows)
                         all_intervals.append((session_name, start, end))
@@ -469,12 +470,14 @@ class DistributedStitchingFixedWindowSampler(torch.utils.data.DistributedSampler
 
             rank_sizes[target_rank] += len(indices)
 
+        # print('indicies', len(indices), type(indices[0]), indices[0:10])
         # shuffle indices for this rank
         indices_list = [indices_list[i] for i in torch.randperm(len(indices_list))]
         indices = [item for sublist in indices_list for item in sublist]
         sequence_index = torch.tensor(
             [i for i, sublist in enumerate(indices_list) for _ in sublist]
         )
+        # print('sequence_index', sequence_index.shape, sequence_index[0:3])
 
         return indices, sequence_index
 

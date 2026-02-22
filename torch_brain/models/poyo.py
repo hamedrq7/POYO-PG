@@ -259,8 +259,15 @@ class POYO(nn.Module):
         output = self.readout(output_latents)
         # print('output', output.shape)
         
+        # print('input_timestamps', input_timestamps.shape)
+        # print('output_timestamps', output_timestamps.shape)
+        # print('output_latents', output_latents.shape)
+        # print('output', output.shape)
+
         if unpack_output:
             output = [output[b][output_mask[b]] for b in range(output.size(0))]
+        
+        # print('output', output.shape)
         
         return output
 
@@ -355,10 +362,10 @@ class POYO(nn.Module):
             "target_weights": pad8(output_weights),
             # extra data needed for evaluation
             "session_id": data.session.id,
-            "absolute_start": data.absolute_start,
+            "absolute_start": data.absolute_start, ##### This is how the model tells the stiching algorithm in evaluation what is the global time of this slice of data is 
             "eval_mask": pad8(eval_mask),
         }
-
+        # print('abs', data.absolute_start)
         return data_dict
 
     def _validate_params(self, sequence_length, latent_step):

@@ -1,6 +1,6 @@
 defaults:
   - defaults.yaml
-  - model: poyo_1.3M.yaml
+  - model: poyo_1.3M.yaml # mlp.yaml
   - dataset: hippo_multisession.yaml # perich_miller_population_2018.yaml #  #   # 
   - _self_  # ensures current config overrides defaults
 

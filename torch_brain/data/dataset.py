@@ -486,9 +486,12 @@ class Dataset(torch.utils.data.Dataset):
         sample = self.get(index.recording_id, index.start, index.end)
         # print(sample.position.timestamps[:])
         # apply transform
+        # print('sample before', sample)
         if self.transform is not None:
             sample = self.transform(sample)
 
+        # print('sample after', sample)
+        # exit()
         return sample
 
     def __len__(self):

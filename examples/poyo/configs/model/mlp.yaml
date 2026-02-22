@@ -1,0 +1,4 @@
+_target_: torch_brain.models.MLPNeuralDecoder
+bin_size: 0.025
+sequence_length: 1.0 # 1.0 works best apparantly 0.5 # 2.5 has very slow convergence for MLP 
+hidden_dim: 2048

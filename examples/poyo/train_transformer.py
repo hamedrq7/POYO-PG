@@ -19,7 +19,7 @@ from temporaldata import Data
 
 from torch_brain.registry import MODALITY_REGISTRY, ModalitySpec
 from torch_brain.optim import SparseLamb
-from torch_brain.models.poyo import POYO
+from torch_brain.models.simple_transformer import TransformerNeuralDecoder
 from torch_brain.utils import callbacks as tbrain_callbacks
 from torch_brain.utils import seed_everything
 from torch_brain.utils.stitcher import (
@@ -57,9 +57,9 @@ class TrainWrapper(L.LightningModule):
     def configure_optimizers(self):
         max_lr = self.cfg.optim.base_lr * self.cfg.batch_size  # linear scaling rule
 
-        special_emb_params = list(self.model.unit_emb.parameters()) + list(
-            self.model.session_emb.parameters()
-        )
+        # special_emb_params = list(self.model.unit_emb.parameters()) + list(
+        #     self.model.session_emb.parameters()
+        # )
 
         remaining_params = [
             p
@@ -69,7 +69,7 @@ class TrainWrapper(L.LightningModule):
 
         optimizer = SparseLamb(
             [
-                {"params": special_emb_params, "sparse": True},
+                # {"params": special_emb_params, "sparse": True},
                 {"params": remaining_params},
             ],
             lr=max_lr,
@@ -94,21 +94,25 @@ class TrainWrapper(L.LightningModule):
         }
 
     def training_step(self, batch, batch_idx):
+        # mask is always true here 
 
         # forward pass
         output_values = self.model(**batch["model_inputs"])
 
         # compute loss
+
         mask = batch["model_inputs"]["output_mask"]
         # print('mask', mask.shape, mask)
-
         output_values = output_values[mask]
+
         # print('target_values before', batch["target_values"].shape)
         target_values = batch["target_values"][mask]
         # print('target_values after', target_values.shape)
 
         target_weights = batch["target_weights"][mask]
-        
+        # print('target_weights', target_weights)
+
+
         # print(output_values.shape, target_values.shape, target_weights.shape)
         loss = self.modality_spec.loss_fn(output_values, target_values, target_weights)
 
@@ -124,9 +128,9 @@ class TrainWrapper(L.LightningModule):
         #     self.log(f"targets/mean_{name}", targets.mean())
         #     self.log(f"targets/std_{name}", targets.std())
 
-        unit_index = batch["model_inputs"]["input_unit_index"].float()
-        self.log("inputs/mean_unit_index", unit_index.mean())
-        self.log("inputs/std_unit_index", unit_index.std())
+        # unit_index = batch["model_inputs"]["input_unit_index"].float()
+        # self.log("inputs/mean_unit_index", unit_index.mean())
+        # self.log("inputs/std_unit_index", unit_index.std())
 
         return loss
 
@@ -134,6 +138,7 @@ class TrainWrapper(L.LightningModule):
 
         # forward pass
         output_values = self.model(**batch["model_inputs"])
+        # print('output_values', output_values.shape)
 
         # prepare data for evaluator
         # (goes to DecodingStitchEvaluator.on_validation_batch_end)
@@ -156,9 +161,21 @@ class DataModule(L.LightningDataModule):
     def __init__(self, cfg: DictConfig):
         super().__init__()
         self.cfg = cfg
+        
         self.log = logging.getLogger(__name__)
+        
+        temp = Dataset(
+            root=self.cfg.data_root,
+            config=self.cfg.dataset,
+            split="train",
+            # session_id_prefix_fn = lambda data: f"hippo1/",
+            # unit_id_prefix_fn = lambda data: f"hippo1/",
+            # subject_id_prefix_fn = lambda data: f"hippo1/",
+        )
 
-    def setup_dataset_and_link_model(self, model: POYO):
+        self.num_units: int = len(temp.get_unit_ids())
+
+    def setup_dataset_and_link_model(self, model: TransformerNeuralDecoder):
         r"""Setup Dataset objects, and update a given model's embedding vocabs (session
         and unit_emb)
         """
@@ -183,7 +200,7 @@ class DataModule(L.LightningDataModule):
         )
         self.train_dataset.disable_data_leakage_check()
 
-        self._init_model_vocab(model)
+        # self._init_model_vocab(model)
 
         eval_transforms = hydra.utils.instantiate(self.cfg.eval_transforms)
 
@@ -209,22 +226,6 @@ class DataModule(L.LightningDataModule):
         )
         self.test_dataset.disable_data_leakage_check()
 
-
-    def _init_model_vocab(self, model: POYO):
-        # TODO: Add code for finetuning situation (when model already has a vocab)
-        
-        model.unit_emb.initialize_vocab(self.get_unit_ids())
-        # self.get_unit_ids() -> list of size 9725, its numpy strings, like: 
-        # ['perich_miller_population_2018/c_20131003_center_out_reaching/group_electrode_group_M1/elec0/unit_0', 'perich_miller_population_2018/c_20131003_center_out_reaching/group_electrode_group_M1/elec1/unit_1']
-        print('self.get_unit_ids()', len(self.get_unit_ids()), (self.get_unit_ids()[0:2]))
-        print('Model unit umbeding vocab: ', model.unit_emb, model.unit_emb.weight.shape)
-
-        model.session_emb.initialize_vocab(self.get_session_ids())
-        print('self.get_session_ids()', len(self.get_session_ids()), (self.get_session_ids()[0:2]))
-        print('Model Sess umbeding vocab: ', model.session_emb, model.session_emb.weight.shape)
-        
-        # self.get_session_ids(), again list of strings (size 99), like: 
-        # ['perich_miller_population_2018/c_20131003_center_out_reaching', 'perich_miller_population_2018/c_20131009_random_target_reaching']
 
     def get_session_ids(self):
         return self.train_dataset.get_session_ids()
@@ -258,30 +259,10 @@ class DataModule(L.LightningDataModule):
         self.log.info(f"Training on {len(self.train_dataset.get_unit_ids())} units")
         self.log.info(f"Training on {len(self.get_session_ids())} sessions")
 
-        # batch = next(iter(train_loader))
-        # print(batch['target_values'].shape)
-
-        # print('train_loader', type(batch))
-        # print('batch', type(batch))
-        # print('model_inputs', batch['model_inputs'].keys())
-        # for k, v in batch['model_inputs'].items():
-        #     print(f'model_inputs/{k}', v.shape)
-        
-        # for k in ['input_timestamps', 'output_timestamps', ]: # 'input_token_type', 
-        #     print(f'model_inputs/{k}', batch['model_inputs'][k].min(), batch['model_inputs'][k].max())
-
-        # print('target_values', batch['target_values'].shape)
-        # print('target_values', batch['target_values'][0:5])
-        # print('target_weights', batch['target_weights'].shape)
-        # print('session_id', batch['session_id'])
-        # print('absolute_start', batch['absolute_start'])
-        # print('eval_mask', batch['eval_mask'].shape)
-
-        # for batch in train_loader: 
-        #     print(batch['model_inputs']['output_timestamps'][:, 0:3], batch['model_inputs']['output_timestamps'][0, -3:])
-        #     print()
-        
-        # print('end of train loader')
+        # for batch in train_loader:
+        #     print(batch['model_inputs']['x'].shape)
+        #     print(batch['target_values'].shape)
+        #     continue
 
         return train_loader
 
@@ -309,11 +290,11 @@ class DataModule(L.LightningDataModule):
 
         self.log.info(f"Expecting {len(val_sampler)} validation steps")
         
-        # for batch in val_loader: 
-        #     print(batch['model_inputs']['output_timestamps'][:, 0:3], batch['model_inputs']['output_timestamps'][0, -3:])
-        #     print()
-        # exit()
-        
+        # for batch in val_loader:
+        #     print(batch['model_inputs']['x'].shape)
+        #     print(batch['target_values'].shape)
+        #     continue
+
         return val_loader
 
     def test_dataloader(self):
@@ -344,7 +325,7 @@ class DataModule(L.LightningDataModule):
 
 @hydra.main(version_base="1.3", config_path="./configs", config_name="train.yaml")
 def main(cfg: DictConfig):
-    logger.info("POYO!")
+    logger.info("Simple transformer!")
 
     # fix random seed, skipped if cfg.seed is None
     seed_everything(cfg.seed)
@@ -367,12 +348,19 @@ def main(cfg: DictConfig):
     readout_spec = MODALITY_REGISTRY[readout_id] 
     print('readout_spec', readout_spec) # ModalitySpec(id=1, dim=2, type=<DataType.CONTINUOUS: 0>, timestamp_key='cursor.timestamps', value_key='cursor.vel', loss_fn=MSELoss())
 
+    data_module = DataModule(cfg=cfg)
+    
     # make model and data module
-    model = hydra.utils.instantiate(cfg.model, readout_spec=readout_spec)
+    ## Changed for MLP and simple_transformer
+    model = hydra.utils.instantiate(
+        cfg.model, 
+        readout_spec=readout_spec,
+        num_units=data_module.num_units,
+    )
     # print('model', model)
 
-    data_module = DataModule(cfg=cfg)
     data_module.setup_dataset_and_link_model(model)
+    # data_module.val_dataloader()
 
     # Lightning train wrapper
     wrapper = TrainWrapper(
@@ -415,6 +403,7 @@ def main(cfg: DictConfig):
         num_nodes=cfg.nodes,
         limit_val_batches=None,  # Ensure no limit on validation batches
         num_sanity_val_steps=-1 if cfg.sanity_check_validation else 0,
+        enable_progress_bar=False, 
     )
 
     # Train

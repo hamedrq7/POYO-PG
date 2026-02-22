@@ -136,7 +136,7 @@ def main():
     args = parser.parse_args()
     input_dir = args.input_dir # 'D:/Pose/Neuro Code/data/NoveltySessInfoMatFiles/linear/'
     output_dir = args.output_dir # 'D:/Pose/Neuro Code/data/NoveltySessInfoMatFiles/linear_processed/hippo_processed/rat_hippocampus'
-
+    # D:/Pose/Neuro Code/data/NoveltySessInfoMatFiles/linear_processed/hippo_scrambled/rat_hippocampus
     import h5py
 
     # iterate over the .nwb files and extract the data from each
@@ -223,6 +223,7 @@ def main():
                 assert np.all(shuffled_values[outside] == locations[outside])
 
                 locations = shuffled_values.copy()
+                print("shuffled")
 
             elif MODE == "circular":
                 print('not implemented yet')
@@ -296,11 +297,11 @@ def main():
         data.set_test_domain(Interval(test_start_time, test_end_time))
         
 
-        plot_interval(data, sess_id, scrambled = args.scramble)
+        plot_interval(data, sess_id, path = f'{args.output_dir}', scrambled = args.scramble, )
 
         import os   
         # save data to disk
-        path = os.path.join(output_dir, f"{sess_id}.h5") if not args.scramble else os.path.join(output_dir, f"{sess_id}_scrambled.h5")
+        path = os.path.join(output_dir, f"{sess_id}.h5")
         with h5py.File(path, "w") as file:
             data.to_hdf5(file, serialize_fn_map=serialize_fn_map)
 
@@ -484,7 +485,7 @@ def plot_neural_splits(
 
     fig.tight_layout()
     return fig, axes
-def plot_interval(data, name, scrambled=False): 
+def plot_interval(data, name, path: str, scrambled=False): 
     splits = []
     for phase in ["train", "valid", "test"]:
         interval = getattr(data, f'{phase}_domain')
@@ -500,7 +501,7 @@ def plot_interval(data, name, scrambled=False):
 
     fig, axes = plot_neural_splits(splits, dt=0.025)
 
-    fig.savefig(f"{name}_neural_splits_scram={scrambled}.png", dpi=300, bbox_inches="tight")
+    fig.savefig(f"{path}/{name}_neural_splits_scram={scrambled}.png", dpi=300, bbox_inches="tight")
     # plt.show()
     plt.clf()
 
