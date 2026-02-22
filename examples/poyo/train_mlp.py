@@ -248,11 +248,11 @@ class DataModule(L.LightningDataModule):
             sampler=train_sampler,
             collate_fn=collate,
             batch_size=self.cfg.batch_size,
-            # num_workers=self.cfg.num_workers,
             drop_last=False,
-            # pin_memory=True,
-            # persistent_workers=True, # True if self.cfg.num_workers > 0 else False,
-            # prefetch_factor=None, # 2 if self.cfg.num_workers > 0 else None,
+            num_workers=self.cfg.num_workers,
+            pin_memory=True,
+            persistent_workers=True, # True if self.cfg.num_workers > 0 else False,
+            prefetch_factor=None, # 2 if self.cfg.num_workers > 0 else None,
         )
 
         self.log.info(f"Training on {len(train_sampler)} samples")
@@ -284,7 +284,7 @@ class DataModule(L.LightningDataModule):
             shuffle=False,
             batch_size=batch_size,
             collate_fn=collate,
-            # num_workers=self.cfg.num_workers,
+            num_workers=self.cfg.num_workers,
             drop_last=False,
         )
 
@@ -315,7 +315,7 @@ class DataModule(L.LightningDataModule):
             shuffle=False,
             batch_size=batch_size,
             collate_fn=collate,
-            # num_workers=self.cfg.num_workers,
+            num_workers=self.cfg.num_workers,
         )
 
         self.log.info(f"Testing on {len(test_sampler)} samples")
