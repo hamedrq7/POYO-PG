@@ -36,9 +36,7 @@ from torch_brain.transforms import Compose
 # higher speed on machines with tensor cores
 torch.set_float32_matmul_precision("medium")
 
-
 logger = logging.getLogger(__name__)
-
 
 class TrainWrapper(L.LightningModule):
     def __init__(

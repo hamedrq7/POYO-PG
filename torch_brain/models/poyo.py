@@ -217,11 +217,18 @@ class POYO(nn.Module):
                 "`model.session_emb.initialize_vocab(session_ids)`"
             )
 
-        # print('In POYO forward...')
+        # print('************Inside forward()************')
 
         # input
+        # print('input_unit_index', input_unit_index.shape)
+        # print('input_token_type', input_token_type.shape)
+        
         inputs = self.unit_emb(input_unit_index) + self.token_type_emb(input_token_type)
+        # print('inputs', inputs.shape)
+
         input_timestamp_emb = self.rotary_emb(input_timestamps)
+        # print('input_timestamp_emb', input_timestamp_emb.shape)
+        ### exit()
 
         # latents
         latents = self.latent_emb(latent_index)
@@ -279,7 +286,14 @@ class POYO(nn.Module):
 
         This code runs on CPU. Do not access GPU tensors inside this function.
         """
-
+        ######### ********* #########
+        ## if batch size is 128, this tokenize function gets called for each sample of 1s, 
+        ## and then each sample would have different number of tokens, because the #spikes can 
+        ## vary in the 1s window. the collate function with padding would padd the samples with 
+        ## less tokens to be equal size and multiply of 8.  
+        ######### ********* #########
+        
+        # print('************Inside tokenize()************')
         # context window
         start, end = 0, self.sequence_length
 
@@ -289,9 +303,9 @@ class POYO(nn.Module):
         spike_timestamps = data.spikes.timestamps
 
         # print(start, end) # 0, 1
-        # print(unit_ids) # 0, 1, ..., 120 ? or what? its multisession
-        # print(spike_unit_index.shape, spike_unit_index[0:3]) # [N, ]
-        # print(spike_timestamps.shape, spike_timestamps[0:3]) # [N, ]
+        # print('unit_ids', unit_ids.shape) # 0, 1, ..., 120 ? or what? its multisession
+        # print('spike_unit_index', spike_unit_index.shape, spike_unit_index[0:3]) # [N, ]
+        # print('spike_timestamps', spike_timestamps.shape, spike_timestamps[0:3]) # [N, ]
 
         # create start and end tokens for each unit
         (
@@ -300,9 +314,9 @@ class POYO(nn.Module):
             se_timestamps,
         ) = create_start_end_unit_tokens(unit_ids, start, end)
         
-        # print(se_token_type_index.shape, se_token_type_index[0:5]) # [#neuronsx2]
-        # print(se_unit_index.shape, se_unit_index[0:5]) # [#neuronsx2]
-        # print(se_timestamps.shape, se_timestamps[0:5]) # [#neuronsx2]
+        # print('se_token_type_index', se_token_type_index.shape, se_token_type_index[0:10]) # [#neurons x2]
+        # print('se_unit_index', se_unit_index.shape, se_unit_index[0:10]) # [#neurons x2]
+        # print('se_timestamps', se_timestamps.shape, se_timestamps[0:10]) # [#neurons x2]
 
         # append start and end tokens to the spike sequence
         spike_token_type_index = np.concatenate(
@@ -311,9 +325,9 @@ class POYO(nn.Module):
         spike_unit_index = np.concatenate([se_unit_index, spike_unit_index])
         spike_timestamps = np.concatenate([se_timestamps, spike_timestamps])
 
-        # print(spike_token_type_index.shape, spike_token_type_index[0:5]) # [#neuronsx2 + N]
-        # print(spike_unit_index.shape, spike_unit_index[0:5]) # [#neuronsx2 + N]
-        # print(spike_timestamps.shape, spike_timestamps[0:5]) # [#neuronsx2 + N]
+        # print('spike_token_type_index', spike_token_type_index.shape, spike_token_type_index[0:20]) # [#neuronsx2 + N]
+        # print('spike_unit_index', spike_unit_index.shape, spike_unit_index[0:5]) # [#neuronsx2 + N]
+        # print('spike_timestamps', spike_timestamps.shape, spike_timestamps[0:5]) # [#neuronsx2 + N]
 
         # unit_index is relative to the recording, so we want it to map it to
         # the global unit index
@@ -341,6 +355,15 @@ class POYO(nn.Module):
         # create session index for output
         output_session_index = self.session_emb.tokenizer(data.session.id)
         output_session_index = np.repeat(output_session_index, len(output_timestamps))
+
+        # print('in tokenize, before padding: ')
+        # print('spike_unit_index', spike_unit_index.shape)
+        # print('spike_timestamps', spike_timestamps.shape)
+        # print('spike_token_type_index', spike_token_type_index.shape)
+        # print('output_session_index', output_session_index.shape)
+        # print('output_timestamps', output_timestamps.shape)
+        # print('output_session_index', output_session_index.shape)
+        # print('output_values', output_values.shape)
 
         data_dict = {
             "model_inputs": {
@@ -429,6 +452,9 @@ class POYO(nn.Module):
             k.replace("model.", ""): v for k, v in checkpoint["state_dict"].items()
         }
 
+        print('Inside load_pretrained: ')
+        print(state_dict.keys())
+        
         # Remove readout layer from checkpoint if we're using a new one
         if skip_readout:
             state_dict = {

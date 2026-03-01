@@ -135,8 +135,11 @@ def main():
 
     args = parser.parse_args()
     input_dir = args.input_dir # 'D:/Pose/Neuro Code/data/NoveltySessInfoMatFiles/linear/'
+    # 'D:/Pose/Neuro Code/data/NoveltySessInfoMatFiles/all raw/'
     output_dir = args.output_dir # 'D:/Pose/Neuro Code/data/NoveltySessInfoMatFiles/linear_processed/hippo_processed/rat_hippocampus'
     # D:/Pose/Neuro Code/data/NoveltySessInfoMatFiles/linear_processed/hippo_scrambled/rat_hippocampus
+    # 'D:/Pose/Neuro Code/data/NoveltySessInfoMatFiles/dump'
+
     import h5py
 
     # iterate over the .nwb files and extract the data from each
@@ -156,6 +159,9 @@ def main():
 
         from pathlib import Path
         _filename = Path(file_path).stem.lower()
+        print(_filename)
+        raw_maze_type = matfile['sessInfo']['Position']['MazeType'][:]
+        maze_type = ''.join(chr(c) for c in raw_maze_type.flatten())
 
         from brainsets.descriptions import BrainsetDescription
 
@@ -297,11 +303,11 @@ def main():
         data.set_test_domain(Interval(test_start_time, test_end_time))
         
 
-        plot_interval(data, sess_id, path = f'{args.output_dir}', scrambled = args.scramble, )
+        plot_interval(data, f'{sess_id}_{maze_type}', path = f'{args.output_dir}', scrambled = args.scramble, )
 
         import os   
         # save data to disk
-        path = os.path.join(output_dir, f"{sess_id}.h5")
+        path = os.path.join(output_dir, f"{sess_id}_{maze_type}.h5")
         with h5py.File(path, "w") as file:
             data.to_hdf5(file, serialize_fn_map=serialize_fn_map)
 

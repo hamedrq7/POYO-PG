@@ -67,15 +67,33 @@ class TrainWrapper(L.LightningModule):
             for n, p in self.model.named_parameters()
             if "unit_emb" not in n and "session_emb" not in n
         ]
+        print('Parameters passed to optimizer (Unit identification for now): ')
+        for vals in special_emb_params:
+            print(vals.shape)
+
 
         optimizer = SparseLamb(
             [
                 {"params": special_emb_params, "sparse": True},
-                {"params": remaining_params},
+                # {"params": remaining_params},
             ],
             lr=max_lr,
             weight_decay=self.cfg.optim.weight_decay,
         )
+
+        # Freeze other params
+        backbone_params = [
+            p for p in self.model.named_parameters()
+            if (
+                'unit_emb' not in p[0]
+                and 'session_emb' not in p[0]
+                and 'readout' not in p[0]
+                and p[1].requires_grad
+            )
+        ]
+        for _, param in backbone_params:
+            param.requires_grad = False
+
 
         scheduler = torch.optim.lr_scheduler.OneCycleLR(
             optimizer,
@@ -184,7 +202,7 @@ class DataModule(L.LightningDataModule):
         )
         self.train_dataset.disable_data_leakage_check()
 
-        self._init_model_vocab(model)
+        # self._init_model_vocab(model)
 
         eval_transforms = hydra.utils.instantiate(self.cfg.eval_transforms)
 
@@ -342,6 +360,201 @@ class DataModule(L.LightningDataModule):
 
         return test_loader
 
+from typing import List 
+from omegaconf import OmegaConf
+
+class New_DataModule(L.LightningDataModule):
+    def __init__(self, cfg: DictConfig, target_session: str):
+        super().__init__()
+        self.cfg = cfg
+        self.log = logging.getLogger(__name__)
+        self.target_session = target_session
+
+    def setup_dataset_and_link_model(self, model: POYO):
+        r"""Setup Dataset objects, and update a given model's embedding vocabs (session
+        and unit_emb)
+        """
+        self.sequence_length = model.sequence_length
+
+        train_transforms = hydra.utils.instantiate(self.cfg.train_transforms)
+        
+        from omegaconf import open_dict
+
+        new_sessions = [self.target_session]
+        with open_dict(self.cfg):
+            self.cfg.dataset[0].selection[0].sessions = new_sessions
+            
+        self.train_dataset = Dataset(
+            root=self.cfg.data_root,
+            config=self.cfg.dataset,
+            split="train",
+            transform=Compose([*train_transforms, model.tokenize]), # [?] read model tokenize
+        )
+        self.train_dataset.disable_data_leakage_check()
+
+        # self._init_model_vocab(model)
+        self._reinit_model_vocab(model, self.train_dataset, inPlace=False) # inplace? 
+
+        eval_transforms = hydra.utils.instantiate(self.cfg.eval_transforms)
+
+        self.val_dataset = Dataset(
+            root=self.cfg.data_root,
+            config=self.cfg.dataset,
+            split="valid",
+            transform=Compose([*eval_transforms, model.tokenize]),
+        )
+        self.val_dataset.disable_data_leakage_check()
+
+        self.test_dataset = Dataset(
+            root=self.cfg.data_root,
+            config=self.cfg.dataset,
+            split="test",
+            transform=Compose([*eval_transforms, model.tokenize]),
+        )
+        self.test_dataset.disable_data_leakage_check()
+
+
+    def _reinit_model_vocab(self, model, train_dataset, inPlace=False): 
+        # Unit Embed: 
+        unit_vocab = train_dataset.get_unit_ids()
+        model.unit_emb.extend_vocab(unit_vocab)
+        model.unit_emb.subset_vocab(unit_vocab, inplace=inPlace)
+        # Session Embed: 
+        sess_vocab = train_dataset.get_session_ids()
+        model.session_emb.extend_vocab(sess_vocab)
+        model.session_emb.subset_vocab(sess_vocab, inplace=inPlace)
+        
+    # def _init_model_vocab(self, model: POYO):
+    #     # TODO: Add code for finetuning situation (when model already has a vocab)
+        
+    #     model.unit_emb.initialize_vocab(self.get_unit_ids())
+    #     # self.get_unit_ids() -> list of size 9725, its numpy strings, like: 
+    #     # ['perich_miller_population_2018/c_20131003_center_out_reaching/group_electrode_group_M1/elec0/unit_0', 'perich_miller_population_2018/c_20131003_center_out_reaching/group_electrode_group_M1/elec1/unit_1']
+    #     print('self.get_unit_ids()', len(self.get_unit_ids()), (self.get_unit_ids()[0:2]))
+    #     print('Model unit umbeding vocab: ', model.unit_emb, model.unit_emb.weight.shape)
+
+    #     model.session_emb.initialize_vocab(self.get_session_ids())
+    #     print('self.get_session_ids()', len(self.get_session_ids()), (self.get_session_ids()[0:2]))
+    #     print('Model Sess umbeding vocab: ', model.session_emb, model.session_emb.weight.shape)
+        
+    #     # self.get_session_ids(), again list of strings (size 99), like: 
+    #     # ['perich_miller_population_2018/c_20131003_center_out_reaching', 'perich_miller_population_2018/c_20131009_random_target_reaching']
+
+    def get_session_ids(self):
+        return self.train_dataset.get_session_ids()
+
+    def get_unit_ids(self):
+        return self.train_dataset.get_unit_ids()
+
+    def get_recording_config_dict(self):
+        return self.train_dataset.get_recording_config_dict()
+
+    def train_dataloader(self):
+        train_sampler = RandomFixedWindowSampler(
+            sampling_intervals=self.train_dataset.get_sampling_intervals(),
+            window_length=self.sequence_length,
+            generator=torch.Generator().manual_seed(self.cfg.seed + 1),
+        )
+
+        train_loader = DataLoader(
+            self.train_dataset,
+            sampler=train_sampler,
+            collate_fn=collate,
+            batch_size=self.cfg.batch_size,
+            drop_last=False,
+            num_workers=self.cfg.num_workers if not _OWN else 0,
+            pin_memory=True if not _OWN else False,
+            persistent_workers=True if not _OWN else False, # True if self.cfg.num_workers > 0 else False,
+            prefetch_factor=None, # 2 if self.cfg.num_workers > 0 else None,
+        )
+
+        self.log.info(f"Training on {len(train_sampler)} samples")
+        self.log.info(f"Training on {len(self.train_dataset.get_unit_ids())} units")
+        self.log.info(f"Training on {len(self.get_session_ids())} sessions")
+
+        # batch = next(iter(train_loader))
+        # print(batch['target_values'].shape)
+
+        # print('train_loader', type(batch))
+        # print('batch', type(batch))
+        # print('model_inputs', batch['model_inputs'].keys())
+        # for k, v in batch['model_inputs'].items():
+        #     print(f'model_inputs/{k}', v.shape)
+        
+        # for k in ['input_timestamps', 'output_timestamps', ]: # 'input_token_type', 
+        #     print(f'model_inputs/{k}', batch['model_inputs'][k].min(), batch['model_inputs'][k].max())
+
+        # print('target_values', batch['target_values'].shape)
+        # print('target_values', batch['target_values'][0:5])
+        # print('target_weights', batch['target_weights'].shape)
+        # print('session_id', batch['session_id'])
+        # print('absolute_start', batch['absolute_start'])
+        # print('eval_mask', batch['eval_mask'].shape)
+
+        # for batch in train_loader: 
+        #     print(batch['model_inputs']['output_timestamps'][:, 0:3], batch['model_inputs']['output_timestamps'][0, -3:])
+        #     print()
+        
+        # print('end of train loader')
+
+        return train_loader
+
+    def val_dataloader(self):
+        batch_size = self.cfg.eval_batch_size or self.cfg.batch_size
+
+        val_sampler = DistributedStitchingFixedWindowSampler(
+            sampling_intervals=self.val_dataset.get_sampling_intervals(),
+            window_length=self.sequence_length,
+            step=self.sequence_length / 2,
+            batch_size=batch_size,
+            num_replicas=self.trainer.world_size,
+            rank=self.trainer.global_rank,
+        )
+
+        val_loader = DataLoader(
+            self.val_dataset,
+            sampler=val_sampler,
+            shuffle=False,
+            batch_size=batch_size,
+            collate_fn=collate,
+            num_workers=self.cfg.num_workers if not _OWN else 0,
+            drop_last=False,
+        )
+
+        self.log.info(f"Expecting {len(val_sampler)} validation steps")
+        
+        # for batch in val_loader: 
+        #     print(batch['model_inputs']['output_timestamps'][:, 0:3], batch['model_inputs']['output_timestamps'][0, -3:])
+        #     print()
+        # exit()
+        
+        return val_loader
+
+    def test_dataloader(self):
+        batch_size = self.cfg.eval_batch_size or self.cfg.batch_size
+
+        test_sampler = DistributedStitchingFixedWindowSampler(
+            sampling_intervals=self.test_dataset.get_sampling_intervals(),
+            window_length=self.sequence_length,
+            step=self.sequence_length / 2,
+            batch_size=batch_size,
+            num_replicas=self.trainer.world_size,
+            rank=self.trainer.global_rank,
+        )
+
+        test_loader = DataLoader(
+            self.test_dataset,
+            sampler=test_sampler,
+            shuffle=False,
+            batch_size=batch_size,
+            collate_fn=collate,
+            num_workers=self.cfg.num_workers if not _OWN else 0,
+        )
+
+        self.log.info(f"Testing on {len(test_sampler)} samples")
+
+        return test_loader
+
 
 @hydra.main(version_base="1.3", config_path="./configs", config_name="train.yaml")
 def main(cfg: DictConfig):
@@ -366,13 +579,16 @@ def main(cfg: DictConfig):
     readout_id = cfg.dataset[0].config.readout.readout_id # [?] important. it gets passed down to model, you need to define it for hippocampus
     # print('readout_id', readout_id) # cursor_velocity_2d
     readout_spec = MODALITY_REGISTRY[readout_id] 
-    print('readout_spec', readout_spec) # ModalitySpec(id=1, dim=2, type=<DataType.CONTINUOUS: 0>, timestamp_key='cursor.timestamps', value_key='cursor.vel', loss_fn=MSELoss())
+    print('readout_spec', readout_spec) # ModalitySpec(id=1, dim=2, type=<DataType.CONTINUOUS: 0>, timestamp_key='cursor.timestamps', value_key='cursor.vel', loss_fn=MSELoss()) 
 
     # make model and data module
     model = hydra.utils.instantiate(cfg.model, readout_spec=readout_spec)
     # print('model', model)
+    model = model.load_pretrained(cfg.ckpt_path, readout_spec)
 
-    data_module = DataModule(cfg=cfg)
+    # data_module = DataModule(cfg=cfg)
+    # data_module.setup_dataset_and_link_model(model)
+    data_module = New_DataModule(cfg=cfg, target_session=cfg.get("target_session", None))
     data_module.setup_dataset_and_link_model(model)
 
     # Lightning train wrapper
@@ -419,10 +635,18 @@ def main(cfg: DictConfig):
     )
 
     # Train
-    trainer.fit(wrapper, data_module, ckpt_path=cfg.ckpt_path)
-
+    trainer.fit(wrapper, data_module, 
+                # ckpt_path=cfg.ckpt_path # model is already loaded, no need to pass sth here
+                )
+    
     # Test
-    trainer.test(wrapper, data_module, ckpt_path="best", weights_only=False)
+    trainer.test(wrapper, data_module, 
+                 ckpt_path= "best",# cfg.ckpt_path, 
+                 weights_only=False)
+    
+
+    # Now load new dataset and finetune...
+    new_session = cfg.get("new_session", None)
 
 
 if __name__ == "__main__":
