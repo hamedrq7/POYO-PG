@@ -154,10 +154,11 @@ class TrainWrapper(L.LightningModule):
 
 
 class DataModule(L.LightningDataModule):
-    def __init__(self, cfg: DictConfig):
+    def __init__(self, cfg: DictConfig, regex: str):
         super().__init__()
         self.cfg = cfg
         self.log = logging.getLogger(__name__)
+        self.regex = regex
 
     def setup_dataset_and_link_model(self, model: POYO):
         r"""Setup Dataset objects, and update a given model's embedding vocabs (session
@@ -199,6 +200,11 @@ class DataModule(L.LightningDataModule):
         )
         self.val_dataset.disable_data_leakage_check()
 
+        from torch_brain.transforms.unit_filter import UnitFilterById
+        eval_transforms.append(
+            UnitFilterById(self.regex, field="spikes", keep_matches=False, reset_index=False)
+        )
+        
         self.test_dataset = Dataset(
             root=self.cfg.data_root,
             config=self.cfg.dataset,
@@ -342,6 +348,9 @@ class DataModule(L.LightningDataModule):
 
         return test_loader
 
+import re
+def regex_for_suffix(s2: str) -> str:
+    return r".*" + re.escape(s2) + r"$"
 
 @hydra.main(version_base="1.3", config_path="./configs", config_name="train.yaml")
 def main(cfg: DictConfig):
@@ -368,62 +377,68 @@ def main(cfg: DictConfig):
     readout_spec = MODALITY_REGISTRY[readout_id] 
     print('readout_spec', readout_spec) # ModalitySpec(id=1, dim=2, type=<DataType.CONTINUOUS: 0>, timestamp_key='cursor.timestamps', value_key='cursor.vel', loss_fn=MSELoss())
 
-    # make model and data module
-    model = hydra.utils.instantiate(cfg.model, readout_spec=readout_spec)
-    # print('model', model)
 
-    data_module = DataModule(cfg=cfg)
-    data_module.setup_dataset_and_link_model(model)
+    for re in ['unit_0', 'unit_1', 'unit_2']:
+        print('*'*20)
+        print('*'*5, re, '*'*5) 
+        print('*'*20) 
 
-    # Lightning train wrapper
-    wrapper = TrainWrapper(
-        cfg=cfg,
-        model=model,
-        modality_spec=readout_spec,
-    )
+        # make model and data module
+        model = hydra.utils.instantiate(cfg.model, readout_spec=readout_spec)
+        # print('model', model)
 
-    stitch_evaluator = DecodingStitchEvaluator(
-        session_ids=data_module.get_session_ids(),
-        modality_spec=readout_spec,
-    )
+        data_module = DataModule(cfg=cfg, regex=re)
+        data_module.setup_dataset_and_link_model(model)
 
-    callbacks = [
-        stitch_evaluator,
-        ModelSummary(max_depth=2),  # Displays the number of parameters in the model.
-        ModelCheckpoint(
-            save_last=True,
-            monitor="average_val_metric",
-            mode="max",
-            save_on_train_epoch_end=True,
-            every_n_epochs=cfg.eval_epochs,
-        ),
-        LearningRateMonitor(logging_interval="step"),
-        tbrain_callbacks.MemInfo(),
-        tbrain_callbacks.EpochTimeLogger(),
-        tbrain_callbacks.ModelWeightStatsLogger(),
-    ]
+        # Lightning train wrapper
+        wrapper = TrainWrapper(
+            cfg=cfg,
+            model=model,
+            modality_spec=readout_spec,
+        )
 
-    trainer = L.Trainer(
-        logger=wandb_logger,
-        default_root_dir=cfg.log_dir,
-        check_val_every_n_epoch=cfg.eval_epochs,
-        max_epochs=cfg.epochs,
-        log_every_n_steps=1,
-        callbacks=callbacks,
-        precision=cfg.precision,
-        accelerator="gpu" if torch.cuda.is_available() else "cpu",
-        devices=cfg.gpus,
-        num_nodes=cfg.nodes,
-        limit_val_batches=None,  # Ensure no limit on validation batches
-        num_sanity_val_steps=-1 if cfg.sanity_check_validation else 0,
-        enable_progress_bar=False,
-    )
+        stitch_evaluator = DecodingStitchEvaluator(
+            session_ids=data_module.get_session_ids(),
+            modality_spec=readout_spec,
+        )
 
-    # Train
-    trainer.fit(wrapper, data_module, ckpt_path=cfg.ckpt_path)
+        callbacks = [
+            stitch_evaluator,
+            ModelSummary(max_depth=2),  # Displays the number of parameters in the model.
+            ModelCheckpoint(
+                save_last=True,
+                monitor="average_val_metric",
+                mode="max",
+                save_on_train_epoch_end=True,
+                every_n_epochs=cfg.eval_epochs,
+            ),
+            LearningRateMonitor(logging_interval="step"),
+            tbrain_callbacks.MemInfo(),
+            tbrain_callbacks.EpochTimeLogger(),
+            tbrain_callbacks.ModelWeightStatsLogger(),
+        ]
 
-    # Test
-    trainer.test(wrapper, data_module, ckpt_path="best", weights_only=False)
+        trainer = L.Trainer(
+            logger=wandb_logger,
+            default_root_dir=cfg.log_dir,
+            check_val_every_n_epoch=cfg.eval_epochs,
+            max_epochs=cfg.epochs,
+            log_every_n_steps=1,
+            callbacks=callbacks,
+            precision=cfg.precision,
+            accelerator="gpu" if torch.cuda.is_available() else "cpu",
+            devices=cfg.gpus,
+            num_nodes=cfg.nodes,
+            limit_val_batches=None,  # Ensure no limit on validation batches
+            # num_sanity_val_steps=-1 if cfg.sanity_check_validation else 0,
+            enable_progress_bar=False,
+        )
+
+        # Train
+        # trainer.fit(wrapper, data_module, ckpt_path=cfg.ckpt_path)
+
+        # Test
+        trainer.test(wrapper, data_module, ckpt_path=cfg.ckpt_path, weights_only=False)
 
 
 if __name__ == "__main__":

@@ -39,7 +39,7 @@ torch.set_float32_matmul_precision("medium")
 
 logger = logging.getLogger(__name__)
 
-_OWN = False # True 
+_OWN = True # True 
 
 class TrainWrapper(L.LightningModule):
     def __init__(
@@ -584,7 +584,10 @@ def main(cfg: DictConfig):
     # make model and data module
     model = hydra.utils.instantiate(cfg.model, readout_spec=readout_spec)
     # print('model', model)
-    model = model.load_pretrained(cfg.ckpt_path, readout_spec)
+    model = model.load_pretrained(
+        cfg.get("pretrained_model", None), 
+        readout_spec
+    )
 
     # data_module = DataModule(cfg=cfg)
     # data_module.setup_dataset_and_link_model(model)
@@ -632,6 +635,7 @@ def main(cfg: DictConfig):
         num_nodes=cfg.nodes,
         limit_val_batches=None,  # Ensure no limit on validation batches
         num_sanity_val_steps=-1 if cfg.sanity_check_validation else 0,
+        enable_progress_bar=False, 
     )
 
     # Train
@@ -644,10 +648,6 @@ def main(cfg: DictConfig):
                  ckpt_path= "best",# cfg.ckpt_path, 
                  weights_only=False)
     
-
-    # Now load new dataset and finetune...
-    new_session = cfg.get("new_session", None)
-
 
 if __name__ == "__main__":
     main()

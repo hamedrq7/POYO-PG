@@ -452,8 +452,8 @@ class POYO(nn.Module):
             k.replace("model.", ""): v for k, v in checkpoint["state_dict"].items()
         }
 
-        print('Inside load_pretrained: ')
-        print(state_dict.keys())
+        # print('Inside load_pretrained: ')
+        # print(state_dict.keys())
         
         # Remove readout layer from checkpoint if we're using a new one
         if skip_readout:

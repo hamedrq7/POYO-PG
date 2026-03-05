@@ -27,17 +27,29 @@ class UnitFilter:
         self.reset_index = reset_index
 
     def __call__(self, data: Data) -> Data:
+        # print('In UnitFilter Call func')
+
+        # print('data', data)
+
         # convention: True means keep the unit
         unit_mask = self.mask_fn(data.units)
+        # print('Unit Mask', unit_mask)
 
         original_num_units = len(data.units.id)
+        # print('data.units before', data.units)
         if self.reset_index:
             data.units = data.units.select_by_mask(unit_mask)
+        # print('data.units after', data.units)
 
         target_obj = getattr(data, self.field)
         if isinstance(target_obj, IrregularTimeSeries):
+            # print('before', getattr(getattr(data, self.field), "unit_index"))
+
             target_mask = np.isin(target_obj.unit_index, np.where(unit_mask)[0])
+            # print('target mask', target_mask)
+
             setattr(data, self.field, target_obj.select_by_mask(target_mask))
+            # print('after', getattr(getattr(data, self.field), "unit_index"))
 
             if self.reset_index:
                 # hack to have the lookup array that remaps the unit index
@@ -46,10 +58,15 @@ class UnitFilter:
                 target_obj = getattr(data, self.field)
                 target_obj.unit_index = relabel_map[target_obj.unit_index]
 
+            
         elif isinstance(target_obj, RegularTimeSeries):
             raise NotImplementedError("RegularTimeSeries is not supported yet.")
         else:
             raise ValueError(f"Unsupported type for {self.field}: {type(target_obj)}")
+        
+        # print('Data after', data)
+        # exit()
+
         return data
 
 
