@@ -377,10 +377,19 @@ def main(cfg: DictConfig):
     readout_spec = MODALITY_REGISTRY[readout_id] 
     print('readout_spec', readout_spec) # ModalitySpec(id=1, dim=2, type=<DataType.CONTINUOUS: 0>, timestamp_key='cursor.timestamps', value_key='cursor.vel', loss_fn=MSELoss())
 
-
-    for re in ['unit_0', 'unit_1', 'unit_2']:
+    all_test_results = {
+        'rat_hippo/achilles_10252013_sessinfo': [], 
+        'rat_hippo/buddy_06272013_sessinfo': [], 
+        'rat_hippo/cicero_09012014_sessinfo': [],
+        'rat_hippo/gatsby_08022013_sessinfo': [],
+        'average_test_metric': []
+    }
+    all_test_neurons = []
+    for re_index in range(50):
+        re = f'unit_{re_index}'
+        re_pattern = regex_for_suffix(re)
         print('*'*20)
-        print('*'*5, re, '*'*5) 
+        print('*'*5, re_pattern, '*'*5) 
         print('*'*20) 
 
         # make model and data module
@@ -438,8 +447,17 @@ def main(cfg: DictConfig):
         # trainer.fit(wrapper, data_module, ckpt_path=cfg.ckpt_path)
 
         # Test
-        trainer.test(wrapper, data_module, ckpt_path=cfg.ckpt_path, weights_only=False)
-
+        test_results = trainer.test(wrapper, data_module, ckpt_path=cfg.ckpt_path, weights_only=False)
+        
+        for k, v in test_results[0].items(): 
+            all_test_results[k].append(v)
+        
+        all_test_neurons.append(re_index)
+    
+    for k in all_test_results.keys(): 
+        for i in range(len(all_test_neurons)):
+            print(k, i, all_test_results[k][i])
+    
 
 if __name__ == "__main__":
     main()

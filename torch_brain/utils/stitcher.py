@@ -248,6 +248,11 @@ class DecodingStitchEvaluator(L.Callback):
 
         # log the metrics
         self.log_dict(metrics)
+        # pl_module.log_dict(
+        #     metrics,
+        #     on_epoch=True,
+        #     sync_dist=True,
+        # )
 
         metrics_data = []
         for metric_name, metric_value in metrics.items():

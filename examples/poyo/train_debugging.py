@@ -55,6 +55,7 @@ class TrainWrapper(L.LightningModule):
         self.modality_spec = modality_spec
         self.save_hyperparameters(OmegaConf.to_container(cfg))
 
+
     def configure_optimizers(self):
         max_lr = self.cfg.optim.base_lr * self.cfg.batch_size  # linear scaling rule
 
@@ -278,9 +279,13 @@ class DataModule(L.LightningDataModule):
         # print('absolute_start', batch['absolute_start'])
         # print('eval_mask', batch['eval_mask'].shape)
 
-        # for batch in train_loader: 
-        #     print(batch['model_inputs']['output_timestamps'][:, 0:3], batch['model_inputs']['output_timestamps'][0, -3:])
-        #     print()
+        for i, batch in enumerate(train_loader):
+            print(batch.keys())
+            print(i, batch['model_inputs']['input_timestamps'].shape) 
+            # print(batch['model_inputs']['output_timestamps'][:, 0:3], batch['model_inputs']['output_timestamps'][0, -3:])
+            # print()
+            break
+        exit()
         
         # print('end of train loader')
 

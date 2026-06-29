@@ -48,7 +48,8 @@ ffn_dropout= 0.2
 lin_dropout= 0.4
 atn_dropout= 0.2
 readout_spec = MODALITY_REGISTRY['linear_maze_pos']
-path = "D:/Pose/Neuro Code/torchbrain/torch_brain/examples/poyo/logs/hippo_multi_1M_100ep/lightning_logs/version_1/checkpoints/epoch=49-step=500.ckpt"
+# path = "D:/Pose/Neuro Code/torchbrain/torch_brain/examples/poyo/logs/hippo_multi_1M_100ep/lightning_logs/version_1/checkpoints/epoch=49-step=500.ckpt"
+path = r"D:\Pose\Neuro Code\torchbrain\torch_brain\examples\poyo\logs\pretraining_for_achilles\lightning_logs\version_0\checkpoints\best.ckpt"
 
 model = POYO(
     sequence_length=sequence_length,
@@ -160,7 +161,7 @@ def pca_unit_embeddings(
 
 
 pca_unit_embeddings(embeddings.detach().cpu().numpy(), session_labels.detach().cpu().numpy(), "")
-exit()
+
 
 def pca_session_embeddings(
     embeddings,

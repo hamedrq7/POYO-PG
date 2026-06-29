@@ -30,8 +30,10 @@ from torch_brain.data import Dataset, collate
 from torch_brain.data.sampler import (
     DistributedStitchingFixedWindowSampler,
     RandomFixedWindowSampler,
+    BalancedRandomFixedWindowSampler
 )
 from torch_brain.transforms import Compose
+import torch.nn.functional as F 
 
 # higher speed on machines with tensor cores
 torch.set_float32_matmul_precision("medium")
@@ -41,12 +43,64 @@ logger = logging.getLogger(__name__)
 
 _OWN = True # True 
 
+def GIP(batch, model, optimizer, loss_fn, n_domains): 
+    batch_size = batch['model_inputs']['input_unit_index'].shape[0]
+    K = batch_size // n_domains
+    assert batch_size % n_domains == 0, 'easiest way'
+
+    grads = {}
+    for start_idx in range(0, batch_size, K):
+        grads[start_idx] = []
+        end_idx = min(start_idx + K, batch_size)
+        
+        # Create a chunk dictionary by slicing all tensors
+        chunk = {
+            k: v[start_idx:end_idx] 
+            for k, v in batch['model_inputs'].items()
+        }
+        target_values = batch['target_values'][start_idx:end_idx]
+        target_weights = batch['target_weights'][start_idx:end_idx]
+
+        # Pass to model
+        output = model(**chunk)
+        # compute loss 
+        mask = chunk['output_mask']
+        output = output[mask]
+        target_values = target_values[mask]
+        target_weights = target_weights[mask]
+        loss = loss_fn(output, target_values, target_weights)
+        
+        # compute grads 
+        loss.backward()
+        # get grasds
+        for name, param in model.named_parameters():
+            if param.grad is not None:
+                if name not in ['unit_emb.weight', 'session_emb.weight', 'token_type_emb.weight', 'latent_emb.weight']:
+                    grads[start_idx].append(param.grad.clone().flatten())
+        
+        optimizer.zero_grad()
+        model.zero_grad()
+
+    grad_mat = []
+    for domain, domain_grads in grads.items():
+        grads[domain] = torch.cat(grads[domain], dim=0)
+        grad_mat.append(grads[domain])
+    
+    grad_mat = torch.stack(grad_mat, dim=0)  # [K, N]
+    X = F.normalize(grad_mat, dim=1)
+    sim = X @ X.T 
+    avg_sim = torch.tril(sim, diagonal=-1).mean()
+
+    return avg_sim.cpu().detach().numpy()
+
+
 class TrainWrapper(L.LightningModule):
     def __init__(
         self,
         cfg: DictConfig,
         model: nn.Module,
         modality_spec: ModalitySpec,
+        n_domains: int
     ):
         super().__init__()
 
@@ -54,6 +108,11 @@ class TrainWrapper(L.LightningModule):
         self.model = model
         self.modality_spec = modality_spec
         self.save_hyperparameters(OmegaConf.to_container(cfg))
+
+        self.before_gip = []
+        self.after_gip = []
+        self.n_domains = n_domains
+
 
     def configure_optimizers(self):
         max_lr = self.cfg.optim.base_lr * self.cfg.batch_size  # linear scaling rule
@@ -67,33 +126,15 @@ class TrainWrapper(L.LightningModule):
             for n, p in self.model.named_parameters()
             if "unit_emb" not in n and "session_emb" not in n
         ]
-        print('Parameters passed to optimizer (Unit identification for now): ')
-        for vals in special_emb_params:
-            print(vals.shape)
-
 
         optimizer = SparseLamb(
             [
                 {"params": special_emb_params, "sparse": True},
-                # {"params": remaining_params},
+                {"params": remaining_params},
             ],
             lr=max_lr,
             weight_decay=self.cfg.optim.weight_decay,
         )
-
-        # Freeze other params
-        backbone_params = [
-            p for p in self.model.named_parameters()
-            if (
-                'unit_emb' not in p[0]
-                and 'session_emb' not in p[0]
-                and 'readout' not in p[0]
-                and p[1].requires_grad
-            )
-        ]
-        for _, param in backbone_params:
-            param.requires_grad = False
-
 
         scheduler = torch.optim.lr_scheduler.OneCycleLR(
             optimizer,
@@ -112,7 +153,16 @@ class TrainWrapper(L.LightningModule):
             },
         }
 
+    def on_train_batch_start(self, batch, batch_idx):
+        """Called right when batch data is available, before training_step.
+        This is where you can do your pre-training checks with gradients."""
+        optimizer = self.trainer.optimizers[0]
+
+        self.before_gip.append(GIP(batch, self.model, optimizer, self.modality_spec.loss_fn, self.n_domains))
+
     def training_step(self, batch, batch_idx):
+        # self.current_batch = batch 
+        # self.current_batch_idx = batch_idx
 
         # forward pass
         output_values = self.model(**batch["model_inputs"])
@@ -149,6 +199,15 @@ class TrainWrapper(L.LightningModule):
 
         return loss
 
+    def on_train_batch_end(self, outputs, batch, batch_idx):
+        """Called after optimizer step. Model has been updated!
+        Perfect place for your post-update checks."""
+        
+        optimizer = self.trainer.optimizers[0]
+
+        self.after_gip.append(GIP(batch, self.model, optimizer, self.modality_spec.loss_fn, self.n_domains))
+
+
     def validation_step(self, batch, batch_idx):
 
         # forward pass
@@ -169,6 +228,7 @@ class TrainWrapper(L.LightningModule):
 
     def test_step(self, batch, batch_idx):
         return self.validation_step(batch, batch_idx)
+
 
 class DataModule(L.LightningDataModule):
     def __init__(self, cfg: DictConfig):
@@ -201,7 +261,7 @@ class DataModule(L.LightningDataModule):
         )
         self.train_dataset.disable_data_leakage_check()
 
-        # self._init_model_vocab(model)
+        self._init_model_vocab(model)
 
         eval_transforms = hydra.utils.instantiate(self.cfg.eval_transforms)
 
@@ -254,18 +314,25 @@ class DataModule(L.LightningDataModule):
         return self.train_dataset.get_recording_config_dict()
 
     def train_dataloader(self):
-        train_sampler = RandomFixedWindowSampler(
+        # train_sampler = RandomFixedWindowSampler(
+        #     sampling_intervals=self.train_dataset.get_sampling_intervals(),
+        #     window_length=self.sequence_length,
+        #     generator=torch.Generator().manual_seed(self.cfg.seed + 1),
+        # )
+        train_sampler = BalancedRandomFixedWindowSampler(
             sampling_intervals=self.train_dataset.get_sampling_intervals(),
             window_length=self.sequence_length,
-            generator=torch.Generator().manual_seed(self.cfg.seed + 1),
+            batch_size=self.cfg.batch_size, 
+            subject_ids=self.train_dataset.get_session_ids(),
+            generator=torch.Generator().manual_seed(self.cfg.seed + 1)
         )
-
+        
         train_loader = DataLoader(
             self.train_dataset,
             sampler=train_sampler,
             collate_fn=collate,
             batch_size=self.cfg.batch_size,
-            drop_last=False,
+            drop_last=True, # False, for balanced shit
             num_workers=self.cfg.num_workers if not _OWN else 0,
             pin_memory=True if not _OWN else False,
             persistent_workers=True if not _OWN else False, # True if self.cfg.num_workers > 0 else False,
@@ -295,9 +362,13 @@ class DataModule(L.LightningDataModule):
         # print('absolute_start', batch['absolute_start'])
         # print('eval_mask', batch['eval_mask'].shape)
 
-        # for batch in train_loader: 
-        #     print(batch['model_inputs']['output_timestamps'][:, 0:3], batch['model_inputs']['output_timestamps'][0, -3:])
-        #     print()
+        # for i, batch in enumerate(train_loader):
+        #     print(batch.keys())
+        #     print(i, batch['model_inputs']['input_timestamps'].shape) 
+        #     # print(batch['model_inputs']['output_timestamps'][:, 0:3], batch['model_inputs']['output_timestamps'][0, -3:])
+        #     # print()
+        #     break
+        # exit()
         
         # print('end of train loader')
 
@@ -359,201 +430,31 @@ class DataModule(L.LightningDataModule):
 
         return test_loader
 
-from typing import List 
-from omegaconf import OmegaConf
+import matplotlib.pyplot as plt 
+def plot_two_lists(list1, list2, save_dir: str, name_to_save: str, title1="Plot 1", title2="Plot 2", xlabel="Index", ylabel="Value"):
+    fig, (ax1, ax2) = plt.subplots(2, 1, sharey=True, figsize=(10, 8))
+    
+    # Plot first list
+    ax1.plot(list1, 'b-', linewidth=1.5)
+    ax1.set_title(title1)
+    ax1.set_xlabel(xlabel)
+    ax1.set_ylabel(ylabel)
+    ax1.grid(True, alpha=0.3)
+    
+    # Plot second list
+    ax2.plot(list2, 'r-', linewidth=1.5)
+    ax2.set_title(title2)
+    ax2.set_xlabel(xlabel)
+    ax2.set_ylabel(ylabel)
+    ax2.grid(True, alpha=0.3)
+    
+    plt.tight_layout()
+    # plt.show()
+    plt.savefig(f'{save_dir}/{name_to_save}')
+    plt.clf()
+    import numpy as np 
 
-class New_DataModule(L.LightningDataModule):
-    def __init__(self, cfg: DictConfig, target_session: str):
-        super().__init__()
-        self.cfg = cfg
-        self.log = logging.getLogger(__name__)
-        self.target_session = target_session
-
-    def setup_dataset_and_link_model(self, model: POYO):
-        r"""Setup Dataset objects, and update a given model's embedding vocabs (session
-        and unit_emb)
-        """
-        self.sequence_length = model.sequence_length
-
-        train_transforms = hydra.utils.instantiate(self.cfg.train_transforms)
-        
-        from omegaconf import open_dict
-
-        new_sessions = [self.target_session]
-        with open_dict(self.cfg):
-            self.cfg.dataset[0].selection[0].sessions = new_sessions
-            
-        self.train_dataset = Dataset(
-            root=self.cfg.data_root,
-            config=self.cfg.dataset,
-            split="train",
-            transform=Compose([*train_transforms, model.tokenize]), # [?] read model tokenize
-        )
-        self.train_dataset.disable_data_leakage_check()
-
-        # self._init_model_vocab(model)
-        self._reinit_model_vocab(model, self.train_dataset, inPlace=False) # inplace? 
-
-        eval_transforms = hydra.utils.instantiate(self.cfg.eval_transforms)
-
-        self.val_dataset = Dataset(
-            root=self.cfg.data_root,
-            config=self.cfg.dataset,
-            split="valid",
-            transform=Compose([*eval_transforms, model.tokenize]),
-        )
-        self.val_dataset.disable_data_leakage_check()
-
-        self.test_dataset = Dataset(
-            root=self.cfg.data_root,
-            config=self.cfg.dataset,
-            split="test",
-            transform=Compose([*eval_transforms, model.tokenize]),
-        )
-        self.test_dataset.disable_data_leakage_check()
-
-
-    def _reinit_model_vocab(self, model, train_dataset, inPlace=False): 
-        # Unit Embed: 
-        unit_vocab = train_dataset.get_unit_ids()
-        model.unit_emb.extend_vocab(unit_vocab)
-        model.unit_emb.subset_vocab(unit_vocab, inplace=inPlace)
-        # Session Embed: 
-        sess_vocab = train_dataset.get_session_ids()
-        model.session_emb.extend_vocab(sess_vocab)
-        model.session_emb.subset_vocab(sess_vocab, inplace=inPlace)
-        
-    # def _init_model_vocab(self, model: POYO):
-    #     # TODO: Add code for finetuning situation (when model already has a vocab)
-        
-    #     model.unit_emb.initialize_vocab(self.get_unit_ids())
-    #     # self.get_unit_ids() -> list of size 9725, its numpy strings, like: 
-    #     # ['perich_miller_population_2018/c_20131003_center_out_reaching/group_electrode_group_M1/elec0/unit_0', 'perich_miller_population_2018/c_20131003_center_out_reaching/group_electrode_group_M1/elec1/unit_1']
-    #     print('self.get_unit_ids()', len(self.get_unit_ids()), (self.get_unit_ids()[0:2]))
-    #     print('Model unit umbeding vocab: ', model.unit_emb, model.unit_emb.weight.shape)
-
-    #     model.session_emb.initialize_vocab(self.get_session_ids())
-    #     print('self.get_session_ids()', len(self.get_session_ids()), (self.get_session_ids()[0:2]))
-    #     print('Model Sess umbeding vocab: ', model.session_emb, model.session_emb.weight.shape)
-        
-    #     # self.get_session_ids(), again list of strings (size 99), like: 
-    #     # ['perich_miller_population_2018/c_20131003_center_out_reaching', 'perich_miller_population_2018/c_20131009_random_target_reaching']
-
-    def get_session_ids(self):
-        return self.train_dataset.get_session_ids()
-
-    def get_unit_ids(self):
-        return self.train_dataset.get_unit_ids()
-
-    def get_recording_config_dict(self):
-        return self.train_dataset.get_recording_config_dict()
-
-    def train_dataloader(self):
-        train_sampler = RandomFixedWindowSampler(
-            sampling_intervals=self.train_dataset.get_sampling_intervals(),
-            window_length=self.sequence_length,
-            generator=torch.Generator().manual_seed(self.cfg.seed + 1),
-        )
-
-        train_loader = DataLoader(
-            self.train_dataset,
-            sampler=train_sampler,
-            collate_fn=collate,
-            batch_size=self.cfg.batch_size,
-            drop_last=False,
-            num_workers=self.cfg.num_workers if not _OWN else 0,
-            pin_memory=True if not _OWN else False,
-            persistent_workers=True if not _OWN else False, # True if self.cfg.num_workers > 0 else False,
-            prefetch_factor=None, # 2 if self.cfg.num_workers > 0 else None,
-        )
-
-        self.log.info(f"Training on {len(train_sampler)} samples")
-        self.log.info(f"Training on {len(self.train_dataset.get_unit_ids())} units")
-        self.log.info(f"Training on {len(self.get_session_ids())} sessions")
-
-        # batch = next(iter(train_loader))
-        # print(batch['target_values'].shape)
-
-        # print('train_loader', type(batch))
-        # print('batch', type(batch))
-        # print('model_inputs', batch['model_inputs'].keys())
-        # for k, v in batch['model_inputs'].items():
-        #     print(f'model_inputs/{k}', v.shape)
-        
-        # for k in ['input_timestamps', 'output_timestamps', ]: # 'input_token_type', 
-        #     print(f'model_inputs/{k}', batch['model_inputs'][k].min(), batch['model_inputs'][k].max())
-
-        # print('target_values', batch['target_values'].shape)
-        # print('target_values', batch['target_values'][0:5])
-        # print('target_weights', batch['target_weights'].shape)
-        # print('session_id', batch['session_id'])
-        # print('absolute_start', batch['absolute_start'])
-        # print('eval_mask', batch['eval_mask'].shape)
-
-        # for batch in train_loader: 
-        #     print(batch['model_inputs']['output_timestamps'][:, 0:3], batch['model_inputs']['output_timestamps'][0, -3:])
-        #     print()
-        
-        # print('end of train loader')
-
-        return train_loader
-
-    def val_dataloader(self):
-        batch_size = self.cfg.eval_batch_size or self.cfg.batch_size
-
-        val_sampler = DistributedStitchingFixedWindowSampler(
-            sampling_intervals=self.val_dataset.get_sampling_intervals(),
-            window_length=self.sequence_length,
-            step=self.sequence_length / 2,
-            batch_size=batch_size,
-            num_replicas=self.trainer.world_size,
-            rank=self.trainer.global_rank,
-        )
-
-        val_loader = DataLoader(
-            self.val_dataset,
-            sampler=val_sampler,
-            shuffle=False,
-            batch_size=batch_size,
-            collate_fn=collate,
-            num_workers=self.cfg.num_workers if not _OWN else 0,
-            drop_last=False,
-        )
-
-        self.log.info(f"Expecting {len(val_sampler)} validation steps")
-        
-        # for batch in val_loader: 
-        #     print(batch['model_inputs']['output_timestamps'][:, 0:3], batch['model_inputs']['output_timestamps'][0, -3:])
-        #     print()
-        # exit()
-        
-        return val_loader
-
-    def test_dataloader(self):
-        batch_size = self.cfg.eval_batch_size or self.cfg.batch_size
-
-        test_sampler = DistributedStitchingFixedWindowSampler(
-            sampling_intervals=self.test_dataset.get_sampling_intervals(),
-            window_length=self.sequence_length,
-            step=self.sequence_length / 2,
-            batch_size=batch_size,
-            num_replicas=self.trainer.world_size,
-            rank=self.trainer.global_rank,
-        )
-
-        test_loader = DataLoader(
-            self.test_dataset,
-            sampler=test_sampler,
-            shuffle=False,
-            batch_size=batch_size,
-            collate_fn=collate,
-            num_workers=self.cfg.num_workers if not _OWN else 0,
-        )
-
-        self.log.info(f"Testing on {len(test_sampler)} samples")
-
-        return test_loader
-
+    np.savez(f'{save_dir}/{name_to_save}', before=list1, after=list2)
 
 @hydra.main(version_base="1.3", config_path="./configs", config_name="train.yaml")
 def main(cfg: DictConfig):
@@ -578,19 +479,13 @@ def main(cfg: DictConfig):
     readout_id = cfg.dataset[0].config.readout.readout_id # [?] important. it gets passed down to model, you need to define it for hippocampus
     # print('readout_id', readout_id) # cursor_velocity_2d
     readout_spec = MODALITY_REGISTRY[readout_id] 
-    print('readout_spec', readout_spec) # ModalitySpec(id=1, dim=2, type=<DataType.CONTINUOUS: 0>, timestamp_key='cursor.timestamps', value_key='cursor.vel', loss_fn=MSELoss()) 
+    print('readout_spec', readout_spec) # ModalitySpec(id=1, dim=2, type=<DataType.CONTINUOUS: 0>, timestamp_key='cursor.timestamps', value_key='cursor.vel', loss_fn=MSELoss())
 
     # make model and data module
     model = hydra.utils.instantiate(cfg.model, readout_spec=readout_spec)
     # print('model', model)
-    model = model.load_pretrained(
-        cfg.get("pretrained_model", None), 
-        readout_spec
-    )
 
-    # data_module = DataModule(cfg=cfg)
-    # data_module.setup_dataset_and_link_model(model)
-    data_module = New_DataModule(cfg=cfg, target_session=cfg.get("target_session", None))
+    data_module = DataModule(cfg=cfg)
     data_module.setup_dataset_and_link_model(model)
 
     # Lightning train wrapper
@@ -598,6 +493,7 @@ def main(cfg: DictConfig):
         cfg=cfg,
         model=model,
         modality_spec=readout_spec,
+        n_domains = len(data_module.get_session_ids())
     )
 
     stitch_evaluator = DecodingStitchEvaluator(
@@ -634,20 +530,17 @@ def main(cfg: DictConfig):
         num_nodes=cfg.nodes,
         limit_val_batches=None,  # Ensure no limit on validation batches
         num_sanity_val_steps=-1 if cfg.sanity_check_validation else 0,
-        enable_progress_bar=False, 
+        enable_progress_bar=False,
     )
 
     # Train
-    trainer.fit(wrapper, data_module, 
-        # ckpt_path=cfg.ckpt_path # model is already loaded, no need to pass sth here
-    )
-    
+    trainer.fit(wrapper, data_module, ckpt_path=cfg.ckpt_path)
+
+    plot_two_lists(wrapper.before_gip, wrapper.after_gip, f'{cfg.log_dir}', 'ERM', 'before', 'after', )
+
     # Test
-    trainer.test(wrapper, data_module, 
-        ckpt_path= "best",# cfg.ckpt_path, 
-        weights_only=False
-    )
-    
+    trainer.test(wrapper, data_module, ckpt_path="best", weights_only=False)
+
 
 if __name__ == "__main__":
     main()

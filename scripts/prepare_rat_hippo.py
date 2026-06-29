@@ -23,6 +23,9 @@ from brainsets import serialize_fn_map
 logging.basicConfig(level=logging.INFO)
 
 def extract_spikes_and_position_from_hippo(matfile, mode: 'str'):
+    # base code from here: https://github.com/zhd96/pi-vae/blob/main/code/rat_preprocess_data.py
+    # changed some stuff 
+    
     ## load spike info
     f = matfile
     spikes_times = np.array(f['sessInfo']['Spikes']['SpikeTimes'])[0];

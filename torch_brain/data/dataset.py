@@ -302,6 +302,8 @@ class Dataset(torch.utils.data.Dataset):
             end: The end time of the slice.
         """
         data = self._get_data_object(recording_id)
+        # print(start, end)
+
         sample = data.slice(start, end)
         if self._check_for_data_leakage_flag and self.split is not None:
             sample._check_for_data_leakage(self.split)
@@ -390,7 +392,7 @@ class Dataset(torch.utils.data.Dataset):
 
                 sampling_intervals = local_vars.get("sampling_intervals")
             sampling_intervals_dict[recording_id] = sampling_intervals
-        print('sampling_intervals_dict', sampling_intervals_dict)
+        # print('sampling_intervals_dict', sampling_intervals_dict)
         return sampling_intervals_dict
 
     def get_recording_config_dict(self):

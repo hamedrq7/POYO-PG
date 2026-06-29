@@ -1,5 +1,6 @@
 from typing import Callable, Dict, Iterable, List, Optional, Tuple, Union
 import logging
+from copy import deepcopy
 
 from pathlib import Path
 import numpy as np
@@ -155,6 +156,9 @@ class POYO(nn.Module):
         self.readout = nn.Linear(dim, readout_spec.dim)
 
         self.dim = dim
+
+    def reset_weights(self, weights):
+        missing, unexpected = self.load_state_dict(deepcopy(weights))
 
     def forward(
         self,
@@ -495,3 +499,144 @@ def poyo_mp(readout_spec: ModalitySpec, ckpt_path=None):
         t_min=1e-4,
         t_max=4.0,
     )
+
+import operator
+from numbers import Number
+from collections import OrderedDict
+
+class ParamDict(OrderedDict):
+    """A dictionary where the values are Tensors, meant to represent weights of
+    a model. This subclass lets you perform arithmetic on weights directly."""
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, *kwargs)
+
+    def _prototype(self, other, op):
+        if isinstance(other, Number):
+            return ParamDict({k: op(v, other) for k, v in self.items()})
+        elif isinstance(other, dict):
+            return ParamDict({k: op(self[k], other[k]) for k in self})
+        else:
+            raise NotImplementedError
+
+    def __add__(self, other):
+        return self._prototype(other, operator.add)
+
+    def __rmul__(self, other):
+        return self._prototype(other, operator.mul)
+
+    __mul__ = __rmul__
+
+    def __neg__(self):
+        return ParamDict({k: -v for k, v in self.items()})
+
+    def __rsub__(self, other):
+        # a- b := a + (-b)
+        return self.__add__(other.__neg__())
+
+    __sub__ = __rsub__
+
+    def __truediv__(self, other):
+        return self._prototype(other, operator.truediv)
+
+
+def fish_step(meta_weights, inner_weights, meta_lr):
+    _meta_weights, _weights = ParamDict(meta_weights), ParamDict(inner_weights)
+    _meta_weights += meta_lr * sum([_weights - _meta_weights], 0 * _meta_weights)
+    return _meta_weights
+
+def get_dataset_config(brainset, sessions):
+    brainset_norms = {
+        "perich_miller_population_2018": {
+            "mean": 0.0,
+            "std": 20.0
+        },
+        "rat_hippocampus": {
+            "mean": 0.0,
+            "std": 1.0
+        }
+    }
+    
+    config = f"""
+    - selection:
+      - brainset: {brainset}
+        sessions:"""
+    if type(sessions) is not list:
+        sessions = [sessions]
+    for session in sessions:
+        config += f"""
+          - {session}"""
+    rid = "cursor_velocity_2d" if brainset == "perich_miller_population_2018" else "linear_maze_pos"
+    config += f"""
+      config:
+        readout:
+          readout_id: {rid}
+          normalize_mean: {brainset_norms[brainset]["mean"]}
+          normalize_std: {brainset_norms[brainset]["std"]}
+          metrics:
+            - metric:
+                _target_: torchmetrics.R2Score
+    """
+
+    config = OmegaConf.create(config)
+
+    return config
+
+
+if __name__ == "__main__": 
+    from torch.utils.data import DataLoader
+    from torch_brain.models.poyo import POYO
+    from torch_brain.registry import MODALITY_REGISTRY, ModalitySpec
+
+    import torch
+    import torch.nn as nn
+    from omegaconf import OmegaConf
+    from temporaldata import Data
+
+    from torch_brain.registry import MODALITY_REGISTRY, ModalitySpec
+    from torch_brain.models.poyo import POYO
+
+    from torch_brain.data import Dataset
+
+    from torch_brain.transforms import Compose
+
+    root = "D:/Pose/Neuro Code/data/NoveltySessInfoMatFiles/linear_processed/hippo_processed"
+
+    cfg = get_dataset_config("rat_hippocampus",
+        ["achilles_10252013_sessinfo",
+        "buddy_06272013_sessinfo",
+        "cicero_09012014_sessinfo",  
+        "gatsby_08022013_sessinfo"
+        ])
+
+    readout_id = "linear_maze_pos"
+    readout_spec = MODALITY_REGISTRY[readout_id]
+    temp_model = POYO(sequence_length=1.0, readout_spec=readout_spec, latent_step=1/8.)
+    temp_model2 = POYO(sequence_length=1.0, readout_spec=readout_spec, latent_step=1/8.)
+    train_dataset = Dataset(
+        root=root,
+        config=cfg,
+        split="train",
+        transform=Compose([temp_model.tokenize]), # [?] read model tokenize
+        # session_id_prefix_fn = lambda data: f"hippo1/",
+        # unit_id_prefix_fn = lambda data: f"hippo1/",
+        # subject_id_prefix_fn = lambda data: f"hippo1/",
+    )
+
+    temp_model.unit_emb.initialize_vocab(train_dataset.get_unit_ids())
+    temp_model.session_emb.initialize_vocab(train_dataset.get_session_ids())
+
+    temp_model2.unit_emb.initialize_vocab(train_dataset.get_unit_ids())
+    temp_model2.session_emb.initialize_vocab(train_dataset.get_session_ids())
+
+    def filter_vocab_from_model_state_dict(model):
+        return {k: v for k, v in model.state_dict().items() if k not in {'unit_emb.vocab', 'session_emb.vocab'}}
+    
+    for i, j in filter_vocab_from_model_state_dict(temp_model).items():
+        print(i, type(j))
+
+    meta_weights = fish_step(meta_weights=filter_vocab_from_model_state_dict(temp_model),
+                                 inner_weights=filter_vocab_from_model_state_dict(temp_model2),
+                                 meta_lr=1.0 / 1.0)
+
+
