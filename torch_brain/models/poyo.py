@@ -422,7 +422,7 @@ class POYO(nn.Module):
     @classmethod
     def load_pretrained(
         cls,
-        checkpoint_path: str | Path,
+        checkpoint_path,
         readout_spec: ModalitySpec,
         skip_readout: bool = False,
     ) -> "POYO":
